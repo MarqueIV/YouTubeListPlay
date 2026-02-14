@@ -21,6 +21,29 @@ REDIRECT_URI = f"http://localhost:{REDIRECT_PORT}"
 TOKEN_FILE = os.path.expanduser("~/.ytlistplay_tokens.json")
 
 
+# --- Client secrets file ---
+
+
+def load_client_secrets(path: str) -> tuple[str, str]:
+    """Load client_id and client_secret from a Google Cloud Console JSON file."""
+    with open(path) as f:
+        data = json.load(f)
+    # The JSON nests credentials under "installed" or "web"
+    for key in ("installed", "web"):
+        if key in data:
+            creds = data[key]
+            client_id = creds.get("client_id")
+            client_secret = creds.get("client_secret")
+            if client_id and client_secret:
+                return client_id, client_secret
+    print(
+        f"Error: Could not find client_id/client_secret in {path}.\n"
+        "Expected a Google Cloud Console OAuth client secrets JSON file.",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+
+
 # --- Token persistence ---
 
 
@@ -278,47 +301,61 @@ def display_playlists(playlists: list[dict]):
 # --- CLI ---
 
 
-def cmd_auth(args):
-    """Authorize with YouTube via OAuth 2.0."""
+def resolve_client_credentials(args) -> tuple[str, str] | None:
+    """Resolve client_id and client_secret from args, secrets file, or env vars."""
+    secrets_file = getattr(args, "client_secrets_file", None) or os.environ.get("YT_CLIENT_SECRETS_FILE")
+    if secrets_file:
+        return load_client_secrets(secrets_file)
     client_id = args.client_id or os.environ.get("YT_CLIENT_ID")
     client_secret = args.client_secret or os.environ.get("YT_CLIENT_SECRET")
-    if not client_id or not client_secret:
+    if client_id and client_secret:
+        return client_id, client_secret
+    return None
+
+
+def cmd_auth(args):
+    """Authorize with YouTube via OAuth 2.0."""
+    creds = resolve_client_credentials(args)
+    if not creds:
         print(
-            "Error: --client-id and --client-secret are required\n"
-            "(or set YT_CLIENT_ID and YT_CLIENT_SECRET environment variables).",
+            "Error: Provide one of:\n"
+            "  --client-secrets-file PATH   (Google Cloud Console JSON file)\n"
+            "  --client-id ID --client-secret SECRET\n"
+            "(or set YT_CLIENT_SECRETS_FILE, or YT_CLIENT_ID and YT_CLIENT_SECRET).",
             file=sys.stderr,
         )
         sys.exit(1)
-    oauth_authorize(client_id, client_secret)
+    oauth_authorize(*creds)
 
 
 def cmd_list(args):
     """List playlists."""
     api_key = args.api_key or os.environ.get("YT_API_KEY")
     channel_id = args.channel_id or os.environ.get("YT_CHANNEL_ID")
-    client_id = args.client_id or os.environ.get("YT_CLIENT_ID")
-    client_secret = args.client_secret or os.environ.get("YT_CLIENT_SECRET")
 
     if api_key and channel_id:
         playlists = fetch_channel_playlists(api_key, channel_id)
-    elif client_id and client_secret:
-        access_token = get_access_token(client_id, client_secret)
-        playlists = fetch_my_playlists(access_token)
     else:
-        # Try saved tokens
-        tokens = load_tokens()
-        if tokens and "access_token" in tokens and "client_id" in tokens:
-            tokens = refresh_access_token(tokens)
-            playlists = fetch_my_playlists(tokens["access_token"])
+        creds = resolve_client_credentials(args)
+        if creds:
+            access_token = get_access_token(*creds)
+            playlists = fetch_my_playlists(access_token)
         else:
-            print(
-                "Error: Provide either:\n"
-                "  --api-key KEY --channel-id ID   (for public playlists)\n"
-                "  --client-id ID --client-secret S (for your playlists via OAuth)\n"
-                "  Or run 'auth' first to save OAuth tokens.\n",
-                file=sys.stderr,
-            )
-            sys.exit(1)
+            # Try saved tokens
+            tokens = load_tokens()
+            if tokens and "access_token" in tokens and "client_id" in tokens:
+                tokens = refresh_access_token(tokens)
+                playlists = fetch_my_playlists(tokens["access_token"])
+            else:
+                print(
+                    "Error: Provide one of:\n"
+                    "  --api-key KEY --channel-id ID        (for public playlists)\n"
+                    "  --client-secrets-file PATH           (Google Cloud Console JSON file)\n"
+                    "  --client-id ID --client-secret SECRET (for your playlists via OAuth)\n"
+                    "  Or run 'auth' first to save OAuth tokens.\n",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
 
     display_playlists(playlists)
 
@@ -332,6 +369,7 @@ def main():
 
     # --- auth command ---
     auth_parser = subparsers.add_parser("auth", help="Authorize with YouTube via OAuth 2.0")
+    auth_parser.add_argument("--client-secrets-file", help="Path to Google Cloud Console OAuth client secrets JSON file")
     auth_parser.add_argument("--client-id", help="OAuth client ID")
     auth_parser.add_argument("--client-secret", help="OAuth client secret")
     auth_parser.set_defaults(func=cmd_auth)
@@ -340,6 +378,7 @@ def main():
     list_parser = subparsers.add_parser("list", help="List your playlists")
     list_parser.add_argument("--api-key", help="YouTube Data API key")
     list_parser.add_argument("--channel-id", help="YouTube channel ID")
+    list_parser.add_argument("--client-secrets-file", help="Path to Google Cloud Console OAuth client secrets JSON file")
     list_parser.add_argument("--client-id", help="OAuth client ID")
     list_parser.add_argument("--client-secret", help="OAuth client secret")
     list_parser.set_defaults(func=cmd_list)
