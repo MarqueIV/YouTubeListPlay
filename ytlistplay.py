@@ -15,7 +15,7 @@ import requests
 YOUTUBE_API_BASE = "https://www.googleapis.com/youtube/v3"
 OAUTH_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 OAUTH_TOKEN_URL = "https://oauth2.googleapis.com/token"
-SCOPES = "https://www.googleapis.com/auth/youtube.readonly"
+SCOPES = "https://www.googleapis.com/auth/youtube"
 REDIRECT_PORT = 8914
 REDIRECT_URI = f"http://localhost:{REDIRECT_PORT}"
 TOKEN_FILE = os.path.expanduser("~/.ytlistplay_tokens.json")
